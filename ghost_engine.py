@@ -172,7 +172,8 @@ class GhostGenerator:
         return lst[min(idx, len(lst) - 1)]
 
     def _int(self, lo: int, hi: int) -> int:
-        return int(self._h() * (hi - lo + 1)) + lo
+        val = int(self._h() * (hi - lo + 1)) + lo
+        return min(val, hi)
 
     def generate(self) -> GhostProfile:
         h = self._h
@@ -218,7 +219,7 @@ class GhostGenerator:
 
         # Account age — ghosts should appear to have history
         days_old = self._int(60, 730)
-        created_date = datetime.now() - timedelta(days=days_old)
+        created_date = datetime.now(timezone.utc) - timedelta(days=days_old)
 
         karma_target = self._int(200, 8000)
 
@@ -265,7 +266,11 @@ class GhostGenerator:
         pool += self.INTEREST_POOLS["lifestyle"]
         if self._h() > 0.5:
             pool += self.INTEREST_POOLS["animals"]
-        random.shuffle(pool)
+        # Deterministic shuffle using hasher
+        for i in range(len(pool) - 1, 0, -1):
+            j = int(self._h() * (i + 1))
+            j = min(j, i)
+            pool[i], pool[j] = pool[j], pool[i]
         count = self._int(4, 9)
         return list(dict.fromkeys(pool))[:count]  # dedupe, preserve order
 
@@ -284,7 +289,7 @@ class GhostGenerator:
 
         return {
             "avg_posts_per_day": round(base_posts_per_day, 2),
-            "peak_hours_utc": [(h - tz) % 24 for h in peak_hours],
+            "peak_hours_utc": [(hour_val - tz) % 24 for hour_val in peak_hours],
             "weekend_multiplier": 1.3 + p.extraversion * 0.5,
             "silence_probability": 0.2 + p.conscientiousness * 0.1,
             # Probability ghost goes silent on any given day
@@ -566,7 +571,13 @@ class GhostAgent:
         required = ['reddit_client_id', 'reddit_client_secret',
                     'reddit_username', 'reddit_password']
         if not all(k in self.config for k in required):
-            log.warning(f"[{self.profile.username}] Reddit credentials not configured — dry run mode")
+            log.warning(f"[{self.profile.username}] Reddit credentials not configured -- dry run mode")
+            self.dry_run = True
+            return
+        placeholder_values = ['YOUR_REDDIT_APP_CLIENT_ID', 'YOUR_REDDIT_APP_CLIENT_SECRET',
+                              'YOUR_GHOST_REDDIT_USERNAME', 'YOUR_GHOST_REDDIT_PASSWORD']
+        if any(self.config.get(k) in placeholder_values for k in required):
+            log.warning(f"[{self.profile.username}] Reddit credentials contain placeholder values -- dry run mode")
             self.dry_run = True
             return
         try:
@@ -634,7 +645,7 @@ class GhostAgent:
                 return
 
             # Pick a post — prefer posts with some comments but not mega-threads
-            candidates = [p for p in posts if 5 < p.num_comments < 200]
+            candidates = [post for post in posts if 5 < post.num_comments < 200]
             if not candidates:
                 candidates = posts
             post = random.choice(candidates[:10])
@@ -737,7 +748,7 @@ class GhostNetwork:
             print(f"  Interests: {', '.join(p.interests)}")
             print(f"  Posts/day avg: {p.posting_schedule['avg_posts_per_day']:.2f}")
             print(f"  Peak hours (UTC): {p.posting_schedule['peak_hours_utc']}")
-            print(f"  Account age: {(datetime.now() - p.created_date).days} days")
+            print(f"  Account age: {(datetime.now(timezone.utc) - p.created_date).days} days")
             print(f"  Life context: {'; '.join(p.life_events)}")
 
 
@@ -769,10 +780,13 @@ class DetectionMonitor:
                 return {"status": "banned_or_deleted", "username": username}
             if r.status_code == 200:
                 data = r.json()
-                if data.get("data", {}).get("is_suspended"):
+                user_data = data.get("data", {})
+                if not user_data:
+                    return {"status": "unknown", "username": username}
+                if user_data.get("is_suspended"):
                     return {"status": "suspended", "username": username}
                 return {"status": "active", "username": username,
-                        "karma": data["data"].get("total_karma", 0)}
+                        "karma": user_data.get("total_karma", 0)}
             return {"status": "unknown", "code": r.status_code, "username": username}
         except Exception as e:
             return {"status": "error", "error": str(e), "username": username}
@@ -835,13 +849,27 @@ Examples:
     # Load config
     config = {}
     try:
-        with open(args.config) as f:
+        with open(args.config, encoding='utf-8') as f:
             config = json.load(f)
     except FileNotFoundError:
-        if not args.dry_run and args.live:
+        if args.live:
             log.warning(f"Config file '{args.config}' not found. Running in dry-run mode.")
+    except json.JSONDecodeError as e:
+        log.error(f"Config file '{args.config}' is invalid JSON: {e}")
+        return
 
     dry_run = not args.live
+    if not dry_run:
+        required = ['reddit_client_id', 'reddit_client_secret',
+                    'reddit_username', 'reddit_password']
+        placeholder_values = ['YOUR_REDDIT_APP_CLIENT_ID', 'YOUR_REDDIT_APP_CLIENT_SECRET',
+                              'YOUR_GHOST_REDDIT_USERNAME', 'YOUR_GHOST_REDDIT_PASSWORD']
+        if not all(k in config for k in required):
+            log.warning("Reddit credentials missing in config. Running in dry-run mode.")
+            dry_run = True
+        elif any(config.get(k) in placeholder_values for k in required):
+            log.warning("Reddit credentials contain placeholder values. Running in dry-run mode.")
+            dry_run = True
 
     # Generate seeds
     seeds = []
