@@ -4,7 +4,7 @@
 
 A Python engine that generates realistic synthetic Reddit personas with human-like behavioral patterns. Each ghost is derived deterministically from a cryptographic seed — no database needed, fully reproducible.
 
-**Part of [Project CHAFF](https://github.com/MT25MB/chaff-extension) by [Down with Big Brother](https://youtube.com/@DownwithBigBrother)**
+**Part of [Project CHAFF](https://github.com/MT25MB/chaff-extension)**
 
 ---
 
