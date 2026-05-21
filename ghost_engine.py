@@ -22,6 +22,7 @@ Author: Project CHAFF — github.com/MT25MB/chaff-extension
 License: GPL-3.0
 """
 
+import sys
 import argparse
 import hashlib
 import json
@@ -30,9 +31,14 @@ import math
 import random
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-import schedule
+try:
+    import schedule
+    SCHEDULE_AVAILABLE = True
+except ImportError:
+    SCHEDULE_AVAILABLE = False
+    print("[WARN] schedule not installed. Run: pip install schedule")
 
 # ── Optional imports (graceful degradation) ──────────────────────────────────
 try:
@@ -54,13 +60,13 @@ try:
     FAKER_AVAILABLE = True
 except ImportError:
     FAKER_AVAILABLE = False
-    print("[WARN] faker not installed. Run: pip install faker")
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [CHAFF] %(levelname)s %(message)s',
-    datefmt='%H:%M:%S'
+    datefmt='%H:%M:%S',
+    encoding='utf-8'
 )
 log = logging.getLogger('chaff')
 
@@ -162,7 +168,8 @@ class GhostGenerator:
         return h
 
     def _pick(self, lst: list) -> any:
-        return lst[int(self._h() * len(lst))]
+        idx = int(self._h() * len(lst))
+        return lst[min(idx, len(lst) - 1)]
 
     def _int(self, lo: int, hi: int) -> int:
         return int(self._h() * (hi - lo + 1)) + lo
@@ -477,7 +484,7 @@ class BehaviorScheduler:
 
     def should_post_now(self) -> bool:
         """Returns True if the ghost should post in the current hour."""
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
         hour = now_utc.hour
         dow = now_utc.weekday()  # 0=Monday
 
@@ -521,7 +528,7 @@ class BehaviorScheduler:
         Ghosts don't check constantly — they sleep like humans.
         """
         # Check in every 15-45 minutes during waking hours
-        hour = datetime.utcnow().hour
+        hour = datetime.now(timezone.utc).hour
         peak_hours = self.schedule['peak_hours_utc']
 
         if hour in peak_hours:
@@ -591,6 +598,9 @@ class GhostAgent:
             actions.append('comment')
 
         action = random.choice(actions)
+        if not p.interests:
+            log.warning(f"[{p.username}] No interests configured — skipping")
+            return
         subreddit = random.choice(p.interests)
 
         log.info(f"[{p.username}] Taking action: {action} in r/{subreddit}")
@@ -666,7 +676,7 @@ class GhostAgent:
 
     def _log_action(self, action: str, subreddit: str, content: str, context: str = ""):
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "ghost": self.profile.username,
             "action": action,
             "subreddit": subreddit,
@@ -696,7 +706,7 @@ class GhostNetwork:
         self.dry_run = dry_run
         self.agents: list[GhostAgent] = []
 
-        log.info(f"Initializing CHAFF Ghost Network — {len(seeds)} ghost(s)")
+        log.info(f"Initializing CHAFF Ghost Network -- {len(seeds)} ghost(s)")
         for seed in seeds:
             profile = GhostGenerator(seed).generate()
             agent = GhostAgent(profile, config, dry_run)
@@ -773,6 +783,9 @@ class DetectionMonitor:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    if sys.stdout.encoding and 'utf' not in sys.stdout.encoding.lower():
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
     parser = argparse.ArgumentParser(
         description='CHAFF Ghost Engine — Synthetic privacy noise generation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -837,12 +850,12 @@ Examples:
         seeds.append(seed)
 
     print(f"""
-╔══════════════════════════════════════════════════════════════╗
-║           ⚡ PROJECT CHAFF — Ghost Engine v0.1.0             ║
-║     Because the best defense against radar is noise.         ║
-╚══════════════════════════════════════════════════════════════╝
++----------------------------------------------------------+
+|       PROJECT CHAFF -- Ghost Engine v0.1.0               |
+|     Because the best defense against radar is noise.     |
++----------------------------------------------------------+
 
-Mode: {'DRY RUN (no actual posting)' if dry_run else '⚠️  LIVE MODE — WILL ACTUALLY POST'}
+Mode: {'DRY RUN (no actual posting)' if dry_run else 'LIVE MODE -- WILL ACTUALLY POST'}
 Ghosts: {args.count}
 Seeds: {seeds}
 LLM: {'Ollama available' if OLLAMA_AVAILABLE else 'Template fallback (install Ollama for better content)'}
@@ -852,11 +865,15 @@ LLM: {'Ollama available' if OLLAMA_AVAILABLE else 'Template fallback (install Ol
     network = GhostNetwork(seeds, config, dry_run=dry_run)
 
     # Profiles only mode
-    if args.profiles_only or (not args.run_once and not args.run_continuous):
+    if args.profiles_only:
         network.print_profiles()
-        if dry_run:
-            print("\n[DRY RUN] Running one simulated cycle...\n")
-            network.run_all()
+        return
+
+    # Default dry-run behavior: show profiles and run one simulated cycle
+    if dry_run and not args.run_once and not args.run_continuous:
+        network.print_profiles()
+        print("\n[DRY RUN] Running one simulated cycle...\n")
+        network.run_all()
         return
 
     # Single cycle
@@ -868,6 +885,9 @@ LLM: {'Ollama available' if OLLAMA_AVAILABLE else 'Template fallback (install Ol
 
     # Continuous mode
     if args.run_continuous:
+        if not SCHEDULE_AVAILABLE:
+            log.error("Continuous mode requires the 'schedule' module. Install: pip install schedule")
+            return
         log.info("Starting continuous operation. Press Ctrl+C to stop.")
         log.info(f"Ghost check-in interval: every 15-120 minutes (randomized)")
 
