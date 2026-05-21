@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this file to config.json and fill in your values. Never commit config.json to git.",
+
+  "reddit_client_id": "YOUR_REDDIT_APP_CLIENT_ID",
+  "reddit_client_secret": "YOUR_REDDIT_APP_CLIENT_SECRET",
+  "reddit_username": "YOUR_GHOST_REDDIT_USERNAME",
+  "reddit_password": "YOUR_GHOST_REDDIT_PASSWORD",
+
+  "_comment2": "Get Reddit API credentials at: https://www.reddit.com/prefs/apps",
+  "_comment3": "Create a 'script' type app. Use a fresh Reddit account for each ghost.",
+
+  "ollama_model": "mistral",
+  "ollama_host": "http://localhost:11434",
+
+  "max_posts_per_day": 3,
+  "max_comments_per_day": 8,
+  "dry_run_default": true
+}
