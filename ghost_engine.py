@@ -254,7 +254,7 @@ class GhostGenerator:
             lambda: f"the_{self._pick(adjectives)}_{self._pick(nouns)}",
             lambda: f"{self._pick(adjectives)}{self._pick(nouns).capitalize()}",
         ]
-        return self._pick(patterns)()
+        return self._pick(patterns)().lower()
 
     def _generate_interests(self, p: PersonalityVector) -> list[str]:
         """Selects subreddits based on personality."""
