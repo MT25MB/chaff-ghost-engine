@@ -771,6 +771,9 @@ class DetectionMonitor:
         Check if a Reddit account is shadowbanned.
         Shadowbanned accounts' posts are invisible to others.
         """
+        import re
+        if not re.match(r'^[A-Za-z0-9_-]{3,20}$', username):
+            return {"status": "invalid_username", "username": username}
         import requests
         url = f"https://www.reddit.com/user/{username}/about.json"
         headers = {"User-Agent": "CHAFF DetectionMonitor v0.1"}
