@@ -14,5 +14,11 @@
 
   "max_posts_per_day": 3,
   "max_comments_per_day": 8,
-  "dry_run_default": true
+  "dry_run_default": true,
+
+  "_comment4": "Ghost Archetypes: lurker, commenter, power_user, newcomer, veteran, troll, helpful, casual",
+  "default_archetype": "casual",
+
+  "_comment5": "Activity logging: actions are saved to action_logs/ directory",
+  "action_log_dir": "action_logs"
 }

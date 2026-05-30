@@ -107,6 +107,260 @@ class GhostProfile:
     created_date: datetime     # simulated account age
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 2: ACTIVITY LOGGER
+# Persists ghost actions to JSON files for analysis and stats.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ActivityLogger:
+    """
+    Logs ghost actions to persistent JSON files.
+    Each ghost gets its own log file. Supports stats generation.
+    """
+
+    LOG_DIR = "action_logs"
+
+    def __init__(self, log_dir: str = None):
+        self.log_dir = log_dir or self.LOG_DIR
+        import os
+        os.makedirs(self.log_dir, exist_ok=True)
+
+    def _log_path(self, username: str) -> str:
+        import os
+        safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in username)
+        return os.path.join(self.log_dir, f"{safe_name}.json")
+
+    def log_action(self, entry: dict):
+        """Append an action entry to the ghost's log file."""
+        import os
+        path = self._log_path(entry.get("ghost", "unknown"))
+        entries = []
+        if os.path.exists(path):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    entries = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                entries = []
+        entries.append(entry)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, indent=2, ensure_ascii=False)
+
+    def get_log(self, username: str) -> list[dict]:
+        """Load all actions for a ghost."""
+        import os
+        path = self._log_path(username)
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def get_stats(self, username: str = None) -> dict:
+        """Generate activity stats for one or all ghosts."""
+        import os
+        if username:
+            entries = self.get_log(username)
+            return self._compute_stats(username, entries)
+
+        stats = {}
+        for filename in os.listdir(self.log_dir):
+            if filename.endswith('.json'):
+                ghost_name = filename[:-5]
+                entries = self.get_log(ghost_name)
+                stats[ghost_name] = self._compute_stats(ghost_name, entries)
+        return stats
+
+    def _compute_stats(self, username: str, entries: list[dict]) -> dict:
+        if not entries:
+            return {"username": username, "total_actions": 0}
+
+        actions = {}
+        subreddits = {}
+        for e in entries:
+            action = e.get("action", "unknown")
+            sub = e.get("subreddit", "unknown")
+            actions[action] = actions.get(action, 0) + 1
+            subreddits[sub] = subreddits.get(sub, 0) + 1
+
+        first_ts = entries[0].get("timestamp", "")
+        last_ts = entries[-1].get("timestamp", "")
+
+        return {
+            "username": username,
+            "total_actions": len(entries),
+            "actions": actions,
+            "top_subreddits": dict(sorted(subreddits.items(), key=lambda x: -x[1])[:5]),
+            "first_action": first_ts,
+            "last_action": last_ts,
+        }
+
+    def print_stats(self, username: str = None):
+        """Print formatted stats to console."""
+        stats = self.get_stats(username)
+        if username:
+            self._print_single_stats(stats)
+        else:
+            for ghost_stats in stats.values():
+                self._print_single_stats(ghost_stats)
+                print()
+
+    def _print_single_stats(self, s: dict):
+        print(f"\n{'='*50}")
+        print(f"Activity Stats: {s['username']}")
+        print(f"  Total actions: {s['total_actions']}")
+        if s['total_actions'] > 0:
+            print(f"  Actions: {', '.join(f'{k}={v}' for k, v in s.get('actions', {}).items())}")
+            print(f"  Top subreddits: {', '.join(f'r/{k}({v})' for k, v in s.get('top_subreddits', {}).items())}")
+            print(f"  First action: {s.get('first_action', 'N/A')}")
+            print(f"  Last action: {s.get('last_action', 'N/A')}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 3: SEASONAL AWARENESS
+# Detects current season/holiday context for more realistic content.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SeasonalContext:
+    """
+    Provides seasonal and holiday context for content generation.
+    Ghosts reference current events, seasons, and holidays naturally.
+    """
+
+    SEASONS = {
+        (12, 21, 3, 20): ("winter", ["snow", "cold weather", "holidays", "new year"]),
+        (3, 21, 6, 20): ("spring", ["warm weather", "gardening", "spring cleaning", "outdoors"]),
+        (6, 21, 9, 22): ("summer", ["vacation", "heat", "outdoor activities", "bbq"]),
+        (9, 23, 12, 20): ("fall", ["leaf peeping", "pumpkin spice", "back to school", "halloween"]),
+    }
+
+    HOLIDAYS = [
+        ((1, 1), "New Year's Day", ["resolutions", "fresh start", "new year"]),
+        ((2, 14), "Valentine's Day", ["love", "relationships", "dating"]),
+        ((3, 17), "St. Patrick's Day", ["irish", "green", "celebration"]),
+        ((7, 4), "Independence Day", ["fireworks", "patriotic", "summer"]),
+        ((10, 31), "Halloween", ["costumes", "trick or treat", "horror"]),
+        ((11, 27, 4), "Thanksgiving", ["gratitude", "family", "food"]),
+        ((12, 25), "Christmas", ["gifts", "holiday season", "family"]),
+        ((12, 31), "New Year's Eve", ["celebration", "year end", "plans"]),
+    ]
+
+    @classmethod
+    def get_season(cls) -> str:
+        now = datetime.now()
+        month, day = now.month, now.day
+        for (sm, sd, em, ed), (season, _) in cls.SEASONS.items():
+            if sm == 12:
+                if (month == 12 and day >= sd) or (month <= em and day <= ed):
+                    return season
+            else:
+                if (month == sm and day >= sd) or (month > sm and month < em) or (month == em and day <= ed):
+                    return season
+        return "winter"
+
+    @classmethod
+    def get_recent_holiday(cls) -> str:
+        now = datetime.now()
+        month, day = now.month, now.day
+        closest = None
+        min_dist = 999
+        for (hm, hd, *_), name, _ in cls.HOLIDAYS:
+            dist = abs((month - hm) * 30 + (day - hd))
+            if dist < min_dist:
+                min_dist = dist
+                closest = name
+        return closest if min_dist < 14 else None
+
+    @classmethod
+    def get_context(cls) -> str:
+        season = cls.get_season()
+        holiday = cls.get_recent_holiday()
+        parts = [f"currently {season}"]
+        if holiday:
+            parts.append(f"recently was {holiday}")
+        return "; ".join(parts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 4: GHOST ARCHETYPES
+# Pre-built personality templates for common ghost types.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GhostArchetype:
+    """
+    Pre-built personality templates for different ghost behaviors.
+    Each archetype defines personality ranges that override the random generation.
+    """
+
+    ARCHETYPES = {
+        "lurker": {
+            "description": "Mostly reads, rarely posts. Low visibility.",
+            "personality": PersonalityVector(0.4, 0.6, 0.15, 0.5, 0.3),
+            "posts_per_day_mult": 0.3,
+            "comment_ratio": 0.1,
+            "upvote_rate": 0.8,
+        },
+        "commenter": {
+            "description": "Frequent commenter, rarely creates posts.",
+            "personality": PersonalityVector(0.5, 0.6, 0.5, 0.7, 0.4),
+            "posts_per_day_mult": 0.5,
+            "comment_ratio": 0.9,
+            "upvote_rate": 0.5,
+        },
+        "power_user": {
+            "description": "Very active, posts and comments frequently.",
+            "personality": PersonalityVector(0.7, 0.5, 0.9, 0.5, 0.6),
+            "posts_per_day_mult": 2.0,
+            "comment_ratio": 0.6,
+            "upvote_rate": 0.3,
+        },
+        "newcomer": {
+            "description": "New account, tentative, asks lots of questions.",
+            "personality": PersonalityVector(0.6, 0.3, 0.4, 0.8, 0.7),
+            "posts_per_day_mult": 0.7,
+            "comment_ratio": 0.7,
+            "upvote_rate": 0.6,
+        },
+        "veteran": {
+            "description": "Old account, experienced, gives advice.",
+            "personality": PersonalityVector(0.5, 0.8, 0.4, 0.6, 0.2),
+            "posts_per_day_mult": 0.8,
+            "comment_ratio": 0.7,
+            "upvote_rate": 0.4,
+        },
+        "troll": {
+            "description": "Contrarian, argues, stirs discussion.",
+            "personality": PersonalityVector(0.3, 0.2, 0.8, 0.1, 0.9),
+            "posts_per_day_mult": 1.5,
+            "comment_ratio": 0.8,
+            "upvote_rate": 0.1,
+        },
+        "helpful": {
+            "description": "Friendly, answers questions, shares knowledge.",
+            "personality": PersonalityVector(0.6, 0.7, 0.6, 0.9, 0.2),
+            "posts_per_day_mult": 0.6,
+            "comment_ratio": 0.8,
+            "upvote_rate": 0.7,
+        },
+        "casual": {
+            "description": "Balanced, normal user behavior.",
+            "personality": PersonalityVector(0.5, 0.5, 0.5, 0.5, 0.5),
+            "posts_per_day_mult": 1.0,
+            "comment_ratio": 0.6,
+            "upvote_rate": 0.5,
+        },
+    }
+
+    @classmethod
+    def get_archetype(cls, name: str) -> dict:
+        return cls.ARCHETYPES.get(name.lower(), cls.ARCHETYPES["casual"])
+
+    @classmethod
+    def list_archetypes(cls) -> list[str]:
+        return list(cls.ARCHETYPES.keys())
+
+
 class GhostGenerator:
     """
     Generates GhostProfile instances deterministically from seeds.
@@ -355,6 +609,8 @@ class ContentGenerator:
         if p.personality.openness > 0.7:
             personality_desc.append("curious and open-minded")
 
+        seasonal_ctx = SeasonalContext.get_context()
+
         return f"""You are a Reddit user named {p.username}. Write in first person as this person.
 
 IDENTITY:
@@ -362,6 +618,7 @@ IDENTITY:
 - Works as: {p.occupation}
 - Personality: {', '.join(personality_desc) or 'balanced and neutral'}
 - Life context: {'; '.join(p.life_events)}
+- Seasonal context: {seasonal_ctx}
 
 WRITING STYLE:
 - Vocabulary level: {style['vocab_level']}
@@ -376,7 +633,8 @@ RULES:
 - Write naturally, not perfectly
 - Match the vocabulary level specified
 - Keep to the approximate word count
-- Sound like a real, specific person — not generic"""
+- Sound like a real, specific person — not generic
+- Reference the season/holiday naturally if relevant"""
 
     def generate_comment(self, subreddit: str, post_title: str, post_body: str = "") -> str:
         """Generate a realistic comment on a post."""
@@ -443,6 +701,7 @@ Make it something a real {self.profile.age}-year-old {self.profile.occupation} m
 
     def _fallback_comment(self, subreddit: str) -> str:
         """Template-based fallback when Ollama is unavailable."""
+        season = SeasonalContext.get_season()
         templates = [
             "This is really interesting, thanks for sharing.",
             "Good point. I've had a similar experience honestly.",
@@ -451,22 +710,52 @@ Make it something a real {self.profile.age}-year-old {self.profile.occupation} m
             "Appreciate you posting this.",
             "Makes sense to me. Solid take.",
             "Been following this for a while, good to see it discussed here.",
+            "Really helpful, bookmarking this for later.",
+            "This is exactly what I was looking for.",
+            "Great explanation, cleared up a lot of confusion.",
+            "I disagree actually, but I see where you're coming from.",
+            "Can confirm, had the same thing happen to me.",
+            "This is underrated. More people need to see this.",
+            "Been thinking about this a lot lately too.",
+            "Wow, didn't know that. Thanks for the TIL.",
+            "Solid advice. I've been doing something similar.",
+            "The real answer is always in the comments.",
+            "This is why I love this sub. Great discussion.",
+            f"Not gonna lie, {season} has me feeling this way too.",
+            "Saving this for later. Really useful info.",
         ]
         return random.choice(templates)
 
     def _fallback_post(self, subreddit: str) -> tuple[str, str]:
+        season = SeasonalContext.get_season()
+        holiday = SeasonalContext.get_recent_holiday()
         titles = [
-            f"Anyone else find this interesting?",
-            f"Thoughts on this?",
-            f"Been thinking about this lately",
+            "Anyone else find this interesting?",
+            "Thoughts on this?",
+            "Been thinking about this lately",
             f"Question for r/{subreddit}",
-            f"Sharing this because I found it helpful",
+            "Sharing this because I found it helpful",
+            "What's your experience with this?",
+            "Discussion: what do you all think?",
+            "TIL something interesting about this",
+            "Looking for advice on this topic",
+            f"How are you all handling {season}?",
+            "What's the best approach here?",
+            "Unpopular opinion but hear me out",
         ]
         bodies = [
             "Just something I've been thinking about lately. Curious what others think.",
             "Found this recently and thought it was worth sharing here.",
             "Not sure if this is the right place but figured I'd ask.",
+            "Been researching this topic and wanted to get some community input.",
+            "Had an experience related to this and wanted to see if anyone else has.",
+            "Started thinking about this more seriously recently.",
+            "Looking for practical advice from people who've dealt with this.",
+            f"With {season} here, this feels more relevant than ever.",
         ]
+        if holiday:
+            titles.append(f"Happy {holiday}! What are your thoughts?")
+            bodies.append(f"Since {holiday} just passed, figured this was worth discussing.")
         return random.choice(titles), random.choice(bodies)
 
 
@@ -554,7 +843,8 @@ class GhostAgent:
     generates content, and (in production) posts to Reddit.
     """
 
-    def __init__(self, profile: GhostProfile, config: dict, dry_run: bool = True):
+    def __init__(self, profile: GhostProfile, config: dict, dry_run: bool = True,
+                 archetype: str = None, activity_logger: ActivityLogger = None):
         self.profile = profile
         self.config = config
         self.dry_run = dry_run
@@ -562,6 +852,9 @@ class GhostAgent:
         self.scheduler = BehaviorScheduler(profile)
         self.reddit = None
         self._action_log = []
+        self.activity_logger = activity_logger
+        self.archetype_data = GhostArchetype.get_archetype(archetype) if archetype else None
+        self.upvote_rate = self.archetype_data.get("upvote_rate", 0.5) if self.archetype_data else 0.5
 
         if not dry_run and PRAW_AVAILABLE:
             self._init_reddit()
@@ -680,10 +973,31 @@ class GhostAgent:
             log.error(f"[{self.profile.username}] Post failed: {e}")
 
     def _do_browse(self, subreddit_name: str):
-        """Browse a subreddit (upvote/read without commenting)."""
-        log.info(f"[{self.profile.username}] Browsing r/{subreddit_name} (no action)")
-        self._log_action('browse', subreddit_name, "")
-        # In production: read posts, maybe upvote, leave no trace beyond server logs
+        """Browse a subreddit — read and optionally upvote posts."""
+        if self.dry_run or not self.reddit:
+            log.info(f"[{self.profile.username}] Browsing r/{subreddit_name} (dry run)")
+            self._log_action('browse', subreddit_name, "")
+            return
+
+        try:
+            sub = self.reddit.subreddit(subreddit_name)
+            posts = list(sub.hot(limit=10))
+            if not posts:
+                return
+
+            upvoted = 0
+            for post in posts:
+                # Upvote based on archetype personality
+                import random as _rand
+                if _rand.random() < self.upvote_rate:
+                    post.upvote()
+                    upvoted += 1
+
+            log.info(f"[{self.profile.username}] Browsing r/{subreddit_name} — upvoted {upvoted}/{len(posts)}")
+            self._log_action('browse', subreddit_name, f"upvoted {upvoted}/{len(posts)} posts")
+        except Exception as e:
+            log.error(f"[{self.profile.username}] Browse failed: {e}")
+            self._log_action('browse', subreddit_name, f"error: {e}")
 
     def _log_action(self, action: str, subreddit: str, content: str, context: str = ""):
         entry = {
@@ -695,6 +1009,8 @@ class GhostAgent:
             "context": context[:80],
         }
         self._action_log.append(entry)
+        if self.activity_logger:
+            self.activity_logger.log_action(entry)
         if action != 'browse':
             mode = "[DRY RUN]" if self.dry_run else "[LIVE]"
             log.info(f"{mode} [{self.profile.username}] {action.upper()} r/{subreddit}: {content[:60]}...")
@@ -712,15 +1028,18 @@ class GhostNetwork:
     In Phase 2, this will be replaced by the P2P network layer.
     """
 
-    def __init__(self, seeds: list[str], config: dict, dry_run: bool = True):
+    def __init__(self, seeds: list[str], config: dict, dry_run: bool = True,
+                 archetype: str = None, activity_logger: ActivityLogger = None):
         self.config = config
         self.dry_run = dry_run
         self.agents: list[GhostAgent] = []
+        self.activity_logger = activity_logger
 
         log.info(f"Initializing CHAFF Ghost Network -- {len(seeds)} ghost(s)")
         for seed in seeds:
             profile = GhostGenerator(seed).generate()
-            agent = GhostAgent(profile, config, dry_run)
+            agent = GhostAgent(profile, config, dry_run, archetype=archetype,
+                              activity_logger=activity_logger)
             self.agents.append(agent)
             log.info(f"  Ghost ready: {profile.username} ({profile.age}yo {profile.occupation} in {profile.location_city})")
 
@@ -750,6 +1069,69 @@ class GhostNetwork:
             print(f"  Peak hours (UTC): {p.posting_schedule['peak_hours_utc']}")
             print(f"  Account age: {(datetime.now(timezone.utc) - p.created_date).days} days")
             print(f"  Life context: {'; '.join(p.life_events)}")
+            if agent.archetype_data:
+                print(f"  Archetype: {agent.archetype_data.get('description', 'custom')}")
+
+    def export_profiles(self, filepath: str):
+        """Export all ghost profiles to a JSON file."""
+        profiles = []
+        for agent in self.agents:
+            p = agent.profile
+            profiles.append({
+                "seed": p.seed,
+                "username": p.username,
+                "age": p.age,
+                "location_city": p.location_city,
+                "location_state": p.location_state,
+                "timezone_offset": p.timezone_offset,
+                "occupation": p.occupation,
+                "education": p.education,
+                "personality": {
+                    "openness": p.personality.openness,
+                    "conscientiousness": p.personality.conscientiousness,
+                    "extraversion": p.personality.extraversion,
+                    "agreeableness": p.personality.agreeableness,
+                    "neuroticism": p.personality.neuroticism,
+                },
+                "interests": p.interests,
+                "writing_style": p.writing_style,
+                "posting_schedule": p.posting_schedule,
+                "life_events": p.life_events,
+                "karma_target": p.karma_target,
+                "created_date": p.created_date.isoformat(),
+            })
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(profiles, f, indent=2, ensure_ascii=False)
+        log.info(f"Exported {len(profiles)} profile(s) to {filepath}")
+
+    @staticmethod
+    def import_profiles(filepath: str) -> list[GhostProfile]:
+        """Import ghost profiles from a JSON file."""
+        with open(filepath, encoding='utf-8') as f:
+            profiles_data = json.load(f)
+        profiles = []
+        for data in profiles_data:
+            pv = data["personality"]
+            profile = GhostProfile(
+                seed=data["seed"],
+                username=data["username"],
+                age=data["age"],
+                location_city=data["location_city"],
+                location_state=data["location_state"],
+                timezone_offset=data["timezone_offset"],
+                occupation=data["occupation"],
+                education=data["education"],
+                personality=PersonalityVector(**pv),
+                interests=data["interests"],
+                writing_style=data["writing_style"],
+                posting_schedule=data["posting_schedule"],
+                life_events=data["life_events"],
+                karma_target=data["karma_target"],
+                created_date=datetime.fromisoformat(data["created_date"]),
+            )
+            profiles.append(profile)
+        log.info(f"Imported {len(profiles)} profile(s) from {filepath}")
+        return profiles
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -794,6 +1176,18 @@ class DetectionMonitor:
         except Exception as e:
             return {"status": "error", "error": str(e), "username": username}
 
+    @staticmethod
+    def check_batch(usernames: list[str]) -> list[dict]:
+        """Check multiple usernames at once. Returns list of results."""
+        results = []
+        for username in usernames:
+            username = username.strip()
+            if not username:
+                continue
+            result = DetectionMonitor.check_shadowban(username)
+            results.append(result)
+        return results
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN ENTRYPOINT
@@ -836,6 +1230,19 @@ Examples:
                         help='Path to config file (default: config.json)')
     parser.add_argument('--verbose', action='store_true',
                         help='Verbose logging')
+    parser.add_argument('--archetype', type=str, default=None,
+                        choices=GhostArchetype.list_archetypes(),
+                        help='Ghost personality archetype (e.g. lurker, commenter, power_user)')
+    parser.add_argument('--export-profiles', type=str, metavar='FILE',
+                        help='Export ghost profiles to JSON file')
+    parser.add_argument('--import-profiles', type=str, metavar='FILE',
+                        help='Import ghost profiles from JSON file')
+    parser.add_argument('--stats', action='store_true',
+                        help='Show activity stats from action logs')
+    parser.add_argument('--stats-ghost', type=str, metavar='USERNAME',
+                        help='Show stats for a specific ghost')
+    parser.add_argument('--check-health-batch', type=str, metavar='FILE',
+                        help='Check shadowban for usernames in a file (one per line)')
 
     args = parser.parse_args()
 
@@ -847,6 +1254,30 @@ Examples:
         result = DetectionMonitor.check_shadowban(args.check_health)
         print(f"\nHealth check for u/{args.check_health}:")
         print(json.dumps(result, indent=2))
+        return
+
+    # Batch health check
+    if args.check_health_batch:
+        try:
+            with open(args.check_health_batch, encoding='utf-8') as f:
+                usernames = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            log.error(f"File not found: {args.check_health_batch}")
+            return
+        print(f"\nBatch health check for {len(usernames)} account(s)...")
+        results = DetectionMonitor.check_batch(usernames)
+        for r in results:
+            status = r.get("status", "unknown")
+            name = r.get("username", "?")
+            karma = r.get("karma", "")
+            karma_str = f" (karma: {karma})" if karma else ""
+            print(f"  u/{name}: {status}{karma_str}")
+        return
+
+    # Stats mode
+    if args.stats or args.stats_ghost:
+        al = ActivityLogger()
+        al.print_stats(args.stats_ghost)
         return
 
     # Load config
@@ -889,11 +1320,32 @@ Examples:
 Mode: {'DRY RUN (no actual posting)' if dry_run else 'LIVE MODE -- WILL ACTUALLY POST'}
 Ghosts: {args.count}
 Seeds: {seeds}
+Archetype: {args.archetype or 'random (default)'}
 LLM: {'Ollama available' if OLLAMA_AVAILABLE else 'Template fallback (install Ollama for better content)'}
+Season: {SeasonalContext.get_season()}
 """)
 
+    # Initialize activity logger
+    activity_logger = ActivityLogger()
+
+    # Import profiles mode
+    if args.import_profiles:
+        try:
+            imported = GhostNetwork.import_profiles(args.import_profiles)
+            seeds = [p.seed for p in imported]
+        except Exception as e:
+            log.error(f"Failed to import profiles: {e}")
+            return
+
     # Initialize network
-    network = GhostNetwork(seeds, config, dry_run=dry_run)
+    network = GhostNetwork(seeds, config, dry_run=dry_run,
+                          archetype=args.archetype,
+                          activity_logger=activity_logger)
+
+    # Export profiles mode
+    if args.export_profiles:
+        network.export_profiles(args.export_profiles)
+        return
 
     # Profiles only mode
     if args.profiles_only:
