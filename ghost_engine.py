@@ -30,9 +30,8 @@ import logging
 import math
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 try:
     import schedule
     SCHEDULE_AVAILABLE = True
@@ -988,8 +987,7 @@ class GhostAgent:
             upvoted = 0
             for post in posts:
                 # Upvote based on archetype personality
-                import random as _rand
-                if _rand.random() < self.upvote_rate:
+                if random.random() < self.upvote_rate:
                     post.upvote()
                     upvoted += 1
 
